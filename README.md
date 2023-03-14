@@ -34,9 +34,9 @@ The covered period of study is from 2016 to 2022.
 
 ### Data cleaning
 
-[Data cleaning script](scripts/data_cleaning.py)
-[SQL Queries](scripts/sql_insights.sql)
-[Python script for aggregation and formatting](scripts/data_to_dataviz.py)
+- [Data cleaning script](scripts/data_cleaning.py)
+- [SQL Queries](scripts/sql_insights.sql)
+- [Python script for aggregation and formatting](scripts/data_to_dataviz.py)
 
 ### EDA
 
