@@ -23,8 +23,8 @@ os.chdir("C:\\Users\\marci\\dev\\FinalProject_IronHack\\dansmarue")
 data_path = "data/dmr_historique"
 
 #%% FUNCTIONS
-def create_connection_sql(schema="dansmarue", password = "addpassword"):
-    connection_string = 'mysql+pymysql://root:' + {password} + f'@127.0.0.1:3306/{schema}'
+def create_connection_sql(schema="dansmarue"):
+    connection_string = 'mysql+pymysql://root:' + "azerty" + f'@127.0.0.1:3306/{schema}'
     engine = create_engine(connection_string)
     return engine
 def convert_date_format(df_col):
@@ -132,8 +132,8 @@ def check_lat_lon_brut(row, bbox_ll_ur=(2.219067,48.812629,2.421112,48.905464)):
 
 #%%
 #pd.set_option('display.max_columns', df_elem.columns.size)
-
-years_analysis = [2016,2017,2018,2019,2020,2021,2022]
+#[2016,[2017,2018,2019,2020,2021,2022]
+years_analysis = [2017,2018,2019,2020,2021,2022]
 
 #year_analysis = "2020"
 
@@ -155,6 +155,62 @@ df_quartier["geom"] = df_quartier["geometry"].apply(lambda x: Polygon(shape(json
 
 # print("Check if there are points with no QUartier _id")
 # df_clean[df_clean["quartier_id"].isna()]
+#%%LOAD CATEGORIES AND SUBCATEGORIES
+table_name = "main_category"
+print(f"""Reading {table_name}""")
+main_cat=pd.read_sql(f"""SELECT * FROM {table_name}""", conn)
+table_name = "sub_category"
+print(f"""Reading {table_name}""")
+sub_cat=pd.read_sql(f"""SELECT * FROM {table_name}""", conn)
+sub_cat = pd.merge(left = sub_cat, right=main_cat[["category_id","name_FR"]], 
+                   how="left",left_on="category_id", right_on ="category_id")
+sub_cat.rename(columns = {"name_FR_x":"name_FR", "name_FR_y":"category_FR"},inplace=True)
+
+
+#%%TEST THE FUZZ
+from thefuzz import fuzz
+from thefuzz import process
+def correction_subcategory(row,name_cat, list_subcategories, cat_id=None):
+    if row:
+        matching = process.extractOne(row, list_subcategories, 
+                                      scorer=fuzz.partial_ratio)
+        if matching[1]<70:
+            print(matching)
+            if fuzz.ratio(row, u"a requalifier") > 70:
+                return "A requalifier"
+            if name_cat =="Objets abandonnés" or cat_id =="item-1000" :
+                if (fuzz.ratio(row, u"Objets abandonnés rubalisés") > 70) or \
+                    (fuzz.ratio(row, u"Objets appartenant à des personnes à la rue")):
+                    return "Autres objets encombrants abandonnés"
+                elif (fuzz.ratio(row, u'Objets infestés') > 70):
+                    return 'Objets infestés de punaises de lit'
+                elif (fuzz.ratio(row, u'Cadenas, chaîne, caddie, chariot') > 70):
+                    return 'Autres objets encombrants abandonnés'
+                else:
+                    return "Autres objets encombrants abandonnés"
+            elif name_cat =="Graffitis, tags, affiches et autocollants" or cat_id== "item-3600":
+                if (fuzz.ratio(row, u"...sur [a-z]") > 70):
+                    return "Affiches, autocollants ou graffitis sur autres supports"
+    
+                elif (fuzz.ratio(row, "Affiche à plus de ")>70) or ((fuzz.ratio(row, "Graffitis à plus de ")>70)):
+                    return "Affiches, autocollants ou graffitis sur autres supports"
+                elif (fuzz.ratio(row, "circonscription fonctionnelle")>70):
+                    return "Affiches ou graffitis à traiter per Circonscription Fonctionnelle"
+                elif (fuzz.ratio(row, "Graffitis à plus de ")>70):
+                    return "Graffitis et autocollants sur mur, façade sur rue, pont et descente d'eau pluviale"
+                else:
+                    return "Affiches, autocollants ou graffitis sur autres supports"
+            elif name_cat =="Propreté" or cat_id== "item-3000":
+                if (fuzz.ratio(row, u"Hors champ") > 70):
+                    return "Hors champ de compétence"
+                else :
+                    return "Autres"
+            elif fuzz.ratio(row, "autre problème ")>70:
+                return "Autres"
+            else:
+                return matching[0]
+        else:
+            return matching[0]
 #%% READING THE DATA
 
 for year_analysis in years_analysis:
@@ -274,6 +330,7 @@ for year_analysis in years_analysis:
         df_sub = df_clean[df_clean["category_FR"]==category_]
         print(df_sub["subcategory_FR"].value_counts())
     #%%TRANSLATE CATEGORY to ENGLISH AND STANDARIZED VERSION
+    df_clean["category_FR"] = df_clean["category_FR"].apply(lambda x: x.strip())
     df_clean["category_EN"] = df_clean["category_FR"].apply(lambda x: translate_category(x))
     #Verifying all have the same columns
     if year_analysis <2021:
@@ -286,8 +343,22 @@ for year_analysis in years_analysis:
            "deltadays_signal_etat",
            'category_EN']]
     
+    #Formatting SUBCATEGORY
+    list_clean_df = []
+    for ig, df_clean_cat in df_clean.groupby("category_FR"):
+        sub_cat_official=  sub_cat[sub_cat["category_FR"]==ig]
+        if sub_cat_official.shape[0] > 0:
+            print(f"Category : {ig}")
+            df_clean_cat["sub_cat_found"] = df_clean_cat["subcategory_FR"].apply(correction_subcategory, 
+                                                                           args=(ig, sub_cat_official["name_FR"],))
+        else:
+            df_clean_cat["sub_cat_found"] = "Autres"
+        list_clean_df.append(df_clean_cat)
+    df_recat = pd.concat(list_clean_df, axis=0)
     
-    
+    df_clean =df_recat.sort_values(by="date_input")
+    df_clean.drop(columns ="subcategory_FR",inplace=True )
+    df_clean.rename(columns={"sub_cat_found":"subcategory_FR"},inplace=True)
     #%%
     from sqlalchemy.types import Integer,VARCHAR, FLOAT,DATE,TEXT
     dictionary_types = dict.fromkeys(['id_dmr', 'category_FR', 'adresse', 'code_postal', 'code_postal_id',
@@ -342,8 +413,7 @@ for year_analysis in years_analysis:
         
         schema = "dansmarue"
         table_name = f"dmr_{year_analysis}_clean"
-        password = "getpassword"
-        connection_string = 'mysql+pymysql://root:{password}@127.0.0.1:3306/'
+        connection_string = 'mysql+pymysql://root:' + "azerty" + '@127.0.0.1:3306/'
         engine = create_engine(connection_string)
         df_clean.to_sql(table_name,engine,schema,index=False,
                         dtype=dictionary_types,if_exists='replace')

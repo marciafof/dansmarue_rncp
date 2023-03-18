@@ -17,7 +17,8 @@ USE dansmarue;
 	UNION ALL
 	SELECT * FROM dmr_2022_clean
     ;
- 
+ALTER TABLE dmr_all
+ADD PRIMARY KEY (id_dmr);
  /* ---------------------- OVERALL VIEW *------------------ */  
     -- GET THE TOTAL COUNT OF REPORTS
 SELECT count(*) as count

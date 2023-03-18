@@ -22,7 +22,7 @@ data_path = "data/dmr_historique"
 
 @contextlib.contextmanager
 def connect():
-    pw = "getyourpassword" #getpass.getpass()
+    pw = "azerty" #getpass.getpass()
     #'mysql+pymysql://root:' + pw + '@127.0.0.1:3306/'
     user="root"
     host = "127.0.0.1"
@@ -46,35 +46,68 @@ def chunks(it, n):
         yield l
 
 def create_connection_sql(schema="dansmarue"):
-    connection_string = 'mysql+pymysql://root:' + "getyourpassword" + f'@127.0.0.1:3306/{schema}'
+    connection_string = 'mysql+pymysql://root:' + "azerty" + f'@127.0.0.1:3306/{schema}'
     engine = create_engine(connection_string)
     return engine
 
-#%%READING POPULATION AND JOIN CODE POSTAL AND QUARTIER
+#%%
 path_output= "output_for_tableau"
+
+#%% TIME SERIES OF YEAR
+schema = "dansmarue"
+table_name = "dmr_all" #f"dmr_{year_analysis}_clean"
+conn = create_connection_sql(schema="dansmarue")
+#LOAD SAMPLE OF DATA TO 
+#table_name = "dmr_all"
+print(f"""Reading {table_name}""")
+query_str = f"""SELECT * FROM {table_name}"""
+df=pd.read_sql(query_str, conn)
+df.columns
+cols_simplified = ['lon', 'lat',
+'date_input', 'quartier_id','category_EN','category_FR','code_postal_id','code_postal']
+df["date_input"] = pd.to_datetime(df["date_input"],format="%Y-%m-%d")
+df_to_tableau = df.loc[:,cols_simplified]
+df.groupby(df.date_input.dt.date).count().iloc[:,0].plot()
+df_to_tableau.to_csv(f"{path_output}/dmr_all_simplified.csv")
+
+#%% TAKING A SAMPLE OF ONE DAY
+schema = "dansmarue"
+table_name = "dmr_all" #f"dmr_{year_analysis}_clean"
+conn = create_connection_sql(schema="dansmarue")
+#LOAD SAMPLE OF DATA TO 
+#table_name = "dmr_all"
+print(f"""Reading {table_name}""")
+query_str = f"""SELECT * FROM {table_name} WHERE  EXTRACT(YEAR FROM date_input) >2020"""
+df=pd.read_sql(query_str, conn)
+
+#%%READING POPULATION AND JOIN CODE POSTAL AND QUARTIER
 
 schema = "dansmarue"
 conn = create_connection_sql(schema="dansmarue")
-df_code_postal = pd.read_sql('SELECT * FROM code_postal', conn)
+df_code_postal = pd.read_sql('SELECT * FROM code_postal_new', conn)
 df_quartier=pd.read_sql('SELECT * FROM quartier', conn)
 #get population data
-df_pop = pd.read_csv("data/insee/population_insee_paris.csv",sep=";", decimal=".")
+df_pop = pd.read_csv("data/insee/population_insee_2019_2021.csv",sep=";", decimal=".")
 df_pop.dropna(axis=0,inplace=True)
+df_pop["menages_p_km2"] = df_pop['Nombre de ménages 2019']/df_pop["Superficie en 2019, en km²"]
+
 #GroupBy PARIS CENTRE --> 1+2+3+4
 df_pop.set_index("code_postal_id",inplace=True)
 df_pop_centre = df_pop.loc[["1_OLD","2_OLD","3_OLD","4_OLD"],["Population en 2019","Population en 2021",
-                                                           'Superficie en 2019, en km²']].sum()
+                                                           'Superficie en 2019, en km²','Nombre de ménages 2019']].sum()
 s_pop_centre =pd.Series(data =["1", None, None, "PARIS CENTRE",df_pop_centre["Population en 2019"],
                   df_pop_centre["Population en 2021"],None,None,
-                  df_pop_centre["Superficie en 2019, en km²"]],
+                  df_pop_centre["Superficie en 2019, en km²"],
+                  df_pop_centre["Nombre de ménages 2019"]],
           index=['code_postal_id',"code_postal", 'numero_INSEE', 'Name INSEE', 'Population en 2019',
                                                  'Population en 2021',
                                                  "Densité de la population (nombre d'habitants au km²) en 2019",
                                                 "Densité de la population (nombre d'habitants au km²) en 2021",
-                                                 'Superficie en 2019, en km²'])
+                                                 'Superficie en 2019, en km²','Nombre de ménages 2019'])
 
 s_pop_centre["Densité de la population (nombre d'habitants au km²) en 2019"] = s_pop_centre["Population en 2019"]/s_pop_centre["Superficie en 2019, en km²"]
 s_pop_centre["Densité de la population (nombre d'habitants au km²) en 2021"] = s_pop_centre["Population en 2021"]/s_pop_centre["Superficie en 2019, en km²"]
+s_pop_centre["menages_p_km2"] = s_pop_centre['Nombre de ménages 2019']/s_pop_centre["Superficie en 2019, en km²"]
 
 df_pop.reset_index(inplace=True)
 df_pop = pd.concat([df_pop,s_pop_centre.to_frame().T ],axis=0)
@@ -87,13 +120,13 @@ df_pop['code_postal_id'] = df_pop['code_postal_id'].astype("str")
 
 df_pop = df_pop[['code_postal_id',"Population en 2021",
                                                            "Densité de la population (nombre d'habitants au km²) en 2021",
-                                                           'Superficie en 2019, en km²']]
+                                                           'Superficie en 2019, en km²', 'Nombre de ménages 2019']]
 df_merge= pd.merge(left=df_pop_arrond, right =df_pop, how="left",
                          left_on="code_postal_id", right_on = "code_postal_id")
 df_merge.columns =['quartier_id', 'code_postal_id', 'name', 'code_postal_long',
        'numero_insee', 'pop_2021',
        'density_pop_2021',
-       'superficie_km2']
+       'superficie_km2',"menages_km2"]
 df_merge.to_csv(f"{path_output}/pop_density_parrond.csv",index=False)
 
 #%%GET QUARTIER ARRONDISSEMENTS TABLE AND JOIN WITH CODE_POSTAL
@@ -102,6 +135,8 @@ schema = "dansmarue"
 table_name = f"dmr_{year_analysis}_clean"
 conn = create_connection_sql(schema="dansmarue")
 #%% CREATE AGGREGATED TABLE FOR HISTORICAL EVOLUTION
+df_pop = pd.read_csv(f"{path_output}/pop_density_parrond.csv")
+
 years_analysis = [2016,2017,2018,2019,2020,2021,2022]
 
 df_historique = pd.DataFrame()
@@ -123,6 +158,8 @@ df_historique.to_csv(f"{path_output}/count_ptype_pquartier_pyear.csv",index=Fals
 
 def divide_supf_codepostal(x, df_pop):
     supf = np.mean(df_pop[df_pop["code_postal_id"]==  int(x["code_postal_id"])].loc[:,"superficie_km2"])
+    print(supf)
+    # print(df_pop[df_pop["code_postal_id"]==  int(x["code_postal_id"])].loc[:,"superficie_km2"])
     return x["count"]/supf
 df_historique = pd.DataFrame()
 for year_analysis in years_analysis:
@@ -139,7 +176,25 @@ for year_analysis in years_analysis:
     df_type_year_quartier["count_by_km2_arron"] = df_type_year_quartier.apply(divide_supf_codepostal, axis=1, args=( df_pop,))
     df_type_year_quartier = df_type_year_quartier.reset_index(names=["year","month"])
     df_historique = pd.concat([df_historique,df_type_year_quartier],axis=0)
+    #break
 df_historique.to_csv(f"{path_output}/count_ptype_pyear_km2.csv",index=False)
+#%% COUNT PER YEAR PER SURFACE OF ARRONDISSEMENT
+df_historique = pd.DataFrame()
+for year_analysis in years_analysis:
+    table_name = f"dmr_{year_analysis}_clean"
+    print(f"""Reading {table_name}""")
+    df_i=pd.read_sql(f"""SELECT * FROM {table_name}""", conn)
+    df_i["date_input"] = pd.to_datetime(df_i["date_input"],format="%Y-%m-%d")
+    df_type_year_quartier = df_i.groupby([df_i.date_input.dt.year,
+                                          'code_postal_id']).count().iloc[:,0]
+    df_type_year_quartier.name = "count"
+    df_type_year_quartier = df_type_year_quartier.reset_index(['code_postal_id'])
+    
+    df_type_year_quartier["countpy_km2_arr"] = df_type_year_quartier.apply(divide_supf_codepostal, axis=1, args=( df_pop,))
+    df_type_year_quartier = df_type_year_quartier.reset_index(names=["year"])
+    df_historique = pd.concat([df_historique,df_type_year_quartier],axis=0)
+
+df_historique.to_csv(f"{path_output}/count_pyear_km2_parr.csv",index=False)
 
 #%% GET MAX PER YEAR PER MONTH PER DAY
 def divide_supf_codepostal(x, df_pop):
